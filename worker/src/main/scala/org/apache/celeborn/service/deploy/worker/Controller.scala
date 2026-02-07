@@ -25,6 +25,9 @@ import java.util.function.BiFunction
 
 import scala.collection.JavaConverters._
 import scala.collection.mutable.ArrayBuffer
+import scala.concurrent.{Await, ExecutionContext, Future}
+import scala.concurrent.duration.Duration
+import scala.util.Try
 
 import io.netty.util.{HashedWheelTimer, Timeout, TimerTask}
 import org.roaringbitmap.RoaringBitmap
@@ -62,6 +65,8 @@ private[deploy] class Controller(
   var partitionLocationInfo: WorkerPartitionLocationInfo = _
   var timer: HashedWheelTimer = _
   var commitThreadPool: ThreadPoolExecutor = _
+  var reserveSlotsThreadPool: ThreadPoolExecutor = _
+  var reserveSlotsExecutionContext: ExecutionContext = _
   var commitFinishedChecker: ScheduledExecutorService = _
   var asyncReplyPool: ScheduledExecutorService = _
   val minPartitionSizeToEstimate = conf.minPartitionSizeToEstimate
@@ -85,6 +90,11 @@ private[deploy] class Controller(
     commitThreadPool = worker.commitThreadPool
     asyncReplyPool = worker.asyncReplyPool
     shutdown = worker.shutdown
+
+    reserveSlotsThreadPool =
+      Executors.newFixedThreadPool(conf.workerReserveSlotsIoThreadPoolSize).asInstanceOf[
+        ThreadPoolExecutor]
+    reserveSlotsExecutionContext = ExecutionContext.fromExecutor(reserveSlotsThreadPool)
 
     commitFinishedChecker = worker.commitFinishedChecker
     commitFinishedChecker.scheduleWithFixedDelay(
@@ -193,9 +203,11 @@ private[deploy] class Controller(
       context.reply(ReserveSlotsResponse(StatusCode.NO_AVAILABLE_WORKING_DIR, msg))
       return
     }
-    val primaryLocs = new jArrayList[PartitionLocation]()
-    try {
-      for (ind <- 0 until requestPrimaryLocs.size()) {
+
+    logInfo(s"Reserving ${requestPrimaryLocs.size()} slots for $shuffleKey")
+    val startReservePrimaryLocks = System.currentTimeMillis
+    val primaryFutures = (0 until requestPrimaryLocs.size()).map { ind =>
+      Future {
         var location = partitionLocationInfo.getPrimaryLocation(
           shuffleKey,
           requestPrimaryLocs.get(ind).getUniqueId)
@@ -212,15 +224,23 @@ private[deploy] class Controller(
             userIdentifier,
             partitionSplitEnabled,
             isSegmentGranularityVisible)
-          primaryLocs.add(new WorkingPartition(location, writer))
+          new WorkingPartition(location, writer)
         } else {
-          primaryLocs.add(location)
+          location
         }
-      }
-    } catch {
-      case e: Exception =>
-        logError(s"CreateWriter for $shuffleKey failed.", e)
+      }(reserveSlotsExecutionContext)
     }
+    val primaryLocs =
+      Try(Await.result(
+        Future.sequence(primaryFutures)(implicitly, reserveSlotsExecutionContext),
+        Duration.Inf)).toEither match {
+        case Right(locations) => new jArrayList[PartitionLocation](locations.asJava)
+        case Left(e) =>
+          logError(s"CreateWriter for primary partitions of $shuffleKey failed.", e)
+          new jArrayList[PartitionLocation]() // Return empty list to trigger error handling
+      }
+    val timeToReservePrimaryLocations = System.currentTimeMillis() - startReservePrimaryLocks;
+    logInfo(s"Reserved ${primaryLocs.size()} slots for $shuffleKey in $timeToReservePrimaryLocations ms (with ${conf.workerReserveSlotsIoThreadPoolSize} threads)")
     if (primaryLocs.size() < requestPrimaryLocs.size()) {
       val msg = s"Not all primary partition satisfied for $shuffleKey"
       logWarning(s"[handleReserveSlots] $msg, will destroy writers.")
@@ -233,9 +253,8 @@ private[deploy] class Controller(
       return
     }
 
-    val replicaLocs = new jArrayList[PartitionLocation]()
-    try {
-      for (ind <- 0 until requestReplicaLocs.size()) {
+    val replicaFutures = (0 until requestReplicaLocs.size()).map { ind =>
+      Future {
         var location =
           partitionLocationInfo.getReplicaLocation(
             shuffleKey,
@@ -253,15 +272,22 @@ private[deploy] class Controller(
             userIdentifier,
             partitionSplitEnabled,
             isSegmentGranularityVisible)
-          replicaLocs.add(new WorkingPartition(location, writer))
+          new WorkingPartition(location, writer)
         } else {
-          replicaLocs.add(location)
+          location
         }
-      }
-    } catch {
-      case e: Exception =>
-        logError(s"CreateWriter for $shuffleKey failed.", e)
+      }(reserveSlotsExecutionContext)
     }
+
+    val replicaLocs =
+      Try(Await.result(
+        Future.sequence(replicaFutures)(implicitly, reserveSlotsExecutionContext),
+        Duration.Inf)).toEither match {
+        case Right(locations) => new jArrayList[PartitionLocation](locations.asJava)
+        case Left(e) =>
+          logError(s"CreateWriter for replica partitions of $shuffleKey failed.", e)
+          new jArrayList[PartitionLocation]() // Return empty list to trigger error handling
+      }
     if (replicaLocs.size() < requestReplicaLocs.size()) {
       val msg = s"Not all replica partition satisfied for $shuffleKey"
       logWarning(s"[handleReserveSlots] $msg, destroy writers.")
@@ -827,5 +853,25 @@ private[deploy] class Controller(
       }
       mapIdx += 1
     }
+  }
+
+  override def onStop(): Unit = {
+    if (reserveSlotsThreadPool != null) {
+      reserveSlotsThreadPool.shutdown()
+      try {
+        if (!reserveSlotsThreadPool.awaitTermination(
+            conf.workerGracefulShutdownTimeoutMs,
+            TimeUnit.MILLISECONDS)) {
+          logWarning("ReserveSlotsThreadPool shutdown timeout, forcing shutdown.")
+          reserveSlotsThreadPool.shutdownNow()
+        }
+      } catch {
+        case e: InterruptedException =>
+          logWarning("ReserveSlotsThreadPool shutdown interrupted, forcing shutdown.", e)
+          reserveSlotsThreadPool.shutdownNow()
+          Thread.currentThread().interrupt()
+      }
+    }
+    super.onStop()
   }
 }
