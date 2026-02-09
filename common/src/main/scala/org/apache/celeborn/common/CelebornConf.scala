@@ -6817,7 +6817,7 @@ object CelebornConf extends Logging {
       .checkValue(
         v => v >= 0,
         "The number of threads must be positive or zero. Setting to zero lets the worker compute the optimal size automatically")
-      .createWithDefault(0)
+      .createWithDefault(1)
 
   val CLIENT_SHUFFLE_DATA_LOST_ON_UNKNOWN_WORKER_ENABLED: ConfigEntry[Boolean] =
     buildConf("celeborn.client.shuffleDataLostOnUnknownWorker.enabled")
