@@ -436,6 +436,16 @@ final private[worker] class StorageManager(conf: CelebornConf, workerSource: Abs
       isSegmentGranularityVisible = false)
   }
 
+  def ensureS3DirectoryForShuffleKey(appId: String, shuffleId: Int): Unit = {
+    val shuffleDir =
+      new Path(new Path(s3Dir, conf.workerWorkingDir), s"$appId/$shuffleId")
+    logDebug(s"Creating S3 directory at $shuffleDir");
+    FileSystem.mkdirs(
+      StorageManager.hadoopFs.get(StorageInfo.Type.S3),
+      shuffleDir,
+      hdfsPermission)
+  }
+
   @throws[IOException]
   def createPartitionDataWriter(
       appId: String,
@@ -1125,11 +1135,7 @@ final private[worker] class StorageManager(conf: CelebornConf, workerSource: Abs
       } else if (storageType == Type.S3 && location.getStorageInfo.S3Available()) {
         val shuffleDir =
           new Path(new Path(s3Dir, conf.workerWorkingDir), s"$appId/$shuffleId")
-        logDebug(s"trying to create S3 file at $shuffleDir");
-        FileSystem.mkdirs(
-          StorageManager.hadoopFs.get(StorageInfo.Type.S3),
-          shuffleDir,
-          hdfsPermission)
+        // directory as been prepared by ensureS3DirectoryForShuffleKey
         val s3FilePath = new Path(shuffleDir, fileName).toString
         val s3FileInfo = new DiskFileInfo(
           userIdentifier,

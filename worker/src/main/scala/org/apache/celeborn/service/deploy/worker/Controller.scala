@@ -204,6 +204,10 @@ private[deploy] class Controller(
       return
     }
 
+    // do this once, and not for each location
+    if (conf.hasS3Storage)
+      storageManager.ensureS3DirectoryForShuffleKey(applicationId, shuffleId)
+
     logInfo(s"Reserving ${requestPrimaryLocs.size()} slots for $shuffleKey")
     val startReservePrimaryLocks = System.currentTimeMillis
     val primaryFutures = (0 until requestPrimaryLocs.size()).map { ind =>
