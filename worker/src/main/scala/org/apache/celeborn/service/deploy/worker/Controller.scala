@@ -200,6 +200,10 @@ private[deploy] class Controller(
       return
     }
 
+    // do this once, and not for each location
+    if (conf.hasS3Storage)
+      storageManager.ensureS3DirectoryForShuffleKey(applicationId, shuffleId)
+
     def collectResults(
         tasks: ArrayBuffer[CompletableFuture[PartitionLocation]],
         createdWriters: CopyOnWriteArrayList[PartitionDataWriter],
