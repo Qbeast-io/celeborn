@@ -46,6 +46,7 @@ import org.apache.celeborn.common.protocol.{PartitionLocation, PartitionSplitMod
 import org.apache.celeborn.common.protocol.StorageInfo.Type
 import org.apache.celeborn.common.quota.ResourceConsumption
 import org.apache.celeborn.common.util.{CelebornExitKind, CelebornHadoopUtils, CollectionUtils, DiskUtils, JavaUtils, PbSerDeUtils, ThreadUtils, Utils}
+import org.apache.celeborn.server.common.service.mpu.MultipartUploadHandlerSharedState
 import org.apache.celeborn.service.deploy.worker._
 import org.apache.celeborn.service.deploy.worker.memory.MemoryManager
 import org.apache.celeborn.service.deploy.worker.memory.MemoryManager.MemoryPressureListener
@@ -79,6 +80,7 @@ final private[worker] class StorageManager(conf: CelebornConf, workerSource: Abs
 
   val diskReserveSize = conf.workerDiskReserveSize
   val diskReserveRatio = conf.workerDiskReserveRatio
+  var s3MultipartUploadHandlerSharedState: MultipartUploadHandlerSharedState = _
 
   // (deviceName -> deviceInfo) and (mount point -> diskInfo)
   val (deviceInfos, diskInfos) = {
@@ -436,7 +438,26 @@ final private[worker] class StorageManager(conf: CelebornConf, workerSource: Abs
       isSegmentGranularityVisible = false)
   }
 
+  def ensureS3MultipartUploaderSharedState(): Unit = {
+    val s3HadoopFs: FileSystem = hadoopFs.get(StorageInfo.Type.S3)
+    if (s3HadoopFs == null)
+      throw new IllegalStateException("S3 is not configured")
+
+    val uri = s3HadoopFs.getUri
+    val bucketName = uri.getHost
+    logInfo(s"Creating S3 client for $uri, bucketName is $bucketName")
+    s3MultipartUploadHandlerSharedState = TierWriterHelper.getS3MultipartUploadHandlerSharedState(
+      s3HadoopFs,
+      bucketName,
+      conf.s3MultiplePartUploadMaxRetries,
+      conf.s3MultiplePartUploadBaseDelay,
+      conf.s3MultiplePartUploadMaxBackoff)
+  }
+
   def ensureS3DirectoryForShuffleKey(appId: String, shuffleId: Int): Unit = {
+
+    ensureS3MultipartUploaderSharedState()
+
     val shuffleDir =
       new Path(new Path(s3Dir, conf.workerWorkingDir), s"$appId/$shuffleId")
     logDebug(s"Creating S3 directory at $shuffleDir");
@@ -860,6 +881,9 @@ final private[worker] class StorageManager(conf: CelebornConf, workerSource: Abs
     if (null != deviceMonitor) {
       deviceMonitor.close()
     }
+
+    if (s3MultipartUploadHandlerSharedState != null)
+      s3MultipartUploadHandlerSharedState.close()
   }
 
   private def flushFileWriters(): Unit = {
