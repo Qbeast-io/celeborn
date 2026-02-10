@@ -25,8 +25,6 @@ import java.util.function.BiFunction
 
 import scala.collection.JavaConverters._
 import scala.collection.mutable.ArrayBuffer
-import scala.concurrent.{Await, ExecutionContext, Future}
-import scala.concurrent.duration.Duration
 import scala.util.Try
 
 import io.netty.util.{HashedWheelTimer, Timeout, TimerTask}
@@ -66,7 +64,6 @@ private[deploy] class Controller(
   var timer: HashedWheelTimer = _
   var commitThreadPool: ThreadPoolExecutor = _
   var reserveSlotsThreadPool: ThreadPoolExecutor = _
-  var reserveSlotsExecutionContext: ExecutionContext = _
   var commitFinishedChecker: ScheduledExecutorService = _
   var asyncReplyPool: ScheduledExecutorService = _
   val minPartitionSizeToEstimate = conf.minPartitionSizeToEstimate
@@ -94,7 +91,6 @@ private[deploy] class Controller(
     reserveSlotsThreadPool =
       Executors.newFixedThreadPool(conf.workerReserveSlotsIoThreadPoolSize).asInstanceOf[
         ThreadPoolExecutor]
-    reserveSlotsExecutionContext = ExecutionContext.fromExecutor(reserveSlotsThreadPool)
 
     commitFinishedChecker = worker.commitFinishedChecker
     commitFinishedChecker.scheduleWithFixedDelay(
@@ -206,35 +202,38 @@ private[deploy] class Controller(
 
     logInfo(s"Reserving ${requestPrimaryLocs.size()} slots for $shuffleKey")
     val startReservePrimaryLocks = System.currentTimeMillis
-    val primaryFutures = (0 until requestPrimaryLocs.size()).map { ind =>
-      Future {
-        var location = partitionLocationInfo.getPrimaryLocation(
-          shuffleKey,
-          requestPrimaryLocs.get(ind).getUniqueId)
-        if (location == null) {
-          location = requestPrimaryLocs.get(ind)
-          val writer = storageManager.createPartitionDataWriter(
-            applicationId,
-            shuffleId,
-            location,
-            splitThreshold,
-            splitMode,
-            partitionType,
-            rangeReadFilter,
-            userIdentifier,
-            partitionSplitEnabled,
-            isSegmentGranularityVisible)
-          new WorkingPartition(location, writer)
-        } else {
-          location
-        }
-      }(reserveSlotsExecutionContext)
+    val primaryCfTasks = ArrayBuffer[CompletableFuture[PartitionLocation]]()
+    (0 until requestPrimaryLocs.size()).foreach { ind =>
+      primaryCfTasks.append(CompletableFuture.supplyAsync(
+        () => {
+          var location = partitionLocationInfo.getPrimaryLocation(
+            shuffleKey,
+            requestPrimaryLocs.get(ind).getUniqueId)
+          if (location == null) {
+            location = requestPrimaryLocs.get(ind)
+            val writer = storageManager.createPartitionDataWriter(
+              applicationId,
+              shuffleId,
+              location,
+              splitThreshold,
+              splitMode,
+              partitionType,
+              rangeReadFilter,
+              userIdentifier,
+              partitionSplitEnabled,
+              isSegmentGranularityVisible)
+            new WorkingPartition(location, writer)
+          } else {
+            location
+          }
+        },
+        reserveSlotsThreadPool))
     }
+
     val primaryLocs =
-      Try(Await.result(
-        Future.sequence(primaryFutures)(implicitly, reserveSlotsExecutionContext),
-        Duration.Inf)).toEither match {
-        case Right(locations) => new jArrayList[PartitionLocation](locations.asJava)
+      Try(CompletableFuture.allOf(primaryCfTasks.toSeq: _*).join()).toEither match {
+        case Right(_) =>
+          new jArrayList[PartitionLocation](primaryCfTasks.map(_.get()).asJava)
         case Left(e) =>
           logError(s"CreateWriter for primary partitions of $shuffleKey failed.", e)
           new jArrayList[PartitionLocation]() // Return empty list to trigger error handling
@@ -253,37 +252,39 @@ private[deploy] class Controller(
       return
     }
 
-    val replicaFutures = (0 until requestReplicaLocs.size()).map { ind =>
-      Future {
-        var location =
-          partitionLocationInfo.getReplicaLocation(
-            shuffleKey,
-            requestReplicaLocs.get(ind).getUniqueId)
-        if (location == null) {
-          location = requestReplicaLocs.get(ind)
-          val writer = storageManager.createPartitionDataWriter(
-            applicationId,
-            shuffleId,
-            location,
-            splitThreshold,
-            splitMode,
-            partitionType,
-            rangeReadFilter,
-            userIdentifier,
-            partitionSplitEnabled,
-            isSegmentGranularityVisible)
-          new WorkingPartition(location, writer)
-        } else {
-          location
-        }
-      }(reserveSlotsExecutionContext)
+    val replicaCfTasks = ArrayBuffer[CompletableFuture[PartitionLocation]]()
+    (0 until requestReplicaLocs.size()).foreach { ind =>
+      replicaCfTasks.append(CompletableFuture.supplyAsync(
+        () => {
+          var location =
+            partitionLocationInfo.getReplicaLocation(
+              shuffleKey,
+              requestReplicaLocs.get(ind).getUniqueId)
+          if (location == null) {
+            location = requestReplicaLocs.get(ind)
+            val writer = storageManager.createPartitionDataWriter(
+              applicationId,
+              shuffleId,
+              location,
+              splitThreshold,
+              splitMode,
+              partitionType,
+              rangeReadFilter,
+              userIdentifier,
+              partitionSplitEnabled,
+              isSegmentGranularityVisible)
+            new WorkingPartition(location, writer)
+          } else {
+            location
+          }
+        },
+        reserveSlotsThreadPool))
     }
 
     val replicaLocs =
-      Try(Await.result(
-        Future.sequence(replicaFutures)(implicitly, reserveSlotsExecutionContext),
-        Duration.Inf)).toEither match {
-        case Right(locations) => new jArrayList[PartitionLocation](locations.asJava)
+      Try(CompletableFuture.allOf(replicaCfTasks.toSeq: _*).join()).toEither match {
+        case Right(_) =>
+          new jArrayList[PartitionLocation](replicaCfTasks.map(_.get()).asJava)
         case Left(e) =>
           logError(s"CreateWriter for replica partitions of $shuffleKey failed.", e)
           new jArrayList[PartitionLocation]() // Return empty list to trigger error handling
