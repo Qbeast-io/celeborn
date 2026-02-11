@@ -298,13 +298,14 @@ class MemoryTierWriter(
 
   override def evict(file: TierWriterBase): Unit = {
     flushLock.synchronized {
+      val numBytes = flushBuffer.readableBytes()
+      logDebug(s"Evict $numBytes from memory to other tier")
+      logInfo(s"Evict $numBytes from memory to other tier ${file.filename} on ${file.storageType}")
       // swap tier writer's flush buffer to memory tier writer's
       // and handle its release
       file.swapFlushBuffer(flushBuffer)
       // close memory file writer after evict happened
       file.flush(false, true)
-      val numBytes = flushBuffer.readableBytes()
-      logDebug(s"Evict $numBytes from memory to other tier")
       MemoryManager.instance.releaseMemoryFileStorage(numBytes)
       MemoryManager.instance.incrementDiskBuffer(numBytes)
       storageManager.unregisterMemoryPartitionWriterAndFileInfo(fileInfo, shuffleKey, filename)

@@ -175,6 +175,10 @@ public class ChunkStreamManager {
   }
 
   public void cleanupExpiredShuffleKey(Set<String> expiredShuffleKeys) {
+    if (expiredShuffleKeys.isEmpty()) {
+      return;
+    }
+
     logger.info(
         "Clean up expired shuffle keys {}",
         String.join(",", expiredShuffleKeys.toArray(new String[0])));

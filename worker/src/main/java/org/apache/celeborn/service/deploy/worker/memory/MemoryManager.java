@@ -92,7 +92,7 @@ public class MemoryManager {
           "worker-memory-manager-read-buffer-target-updater");
   private CreditStreamManager creditStreamManager = null;
 
-  private long memoryFileStorageThreshold;
+  public long memoryFileStorageThreshold;
   private final LongAdder memoryFileStorageCounter = new LongAdder();
   private final StorageManager storageManager;
   private boolean pinnedMemoryCheckEnabled;
@@ -191,13 +191,14 @@ public class MemoryManager {
                     + "disk buffer size: {}, "
                     + "sort memory size: {}, "
                     + "read buffer size: {}, "
-                    + "memory file storage size : {}",
+                    + "memory file storage size : {}:{}",
                 Utils.bytesToString(getNettyUsedDirectMemory()),
                 Utils.bytesToString(maxDirectMemory),
                 Utils.bytesToString(diskBufferCounter.get()),
                 Utils.bytesToString(sortMemoryCounter.get()),
                 Utils.bytesToString(readBufferCounter.get()),
-                Utils.bytesToString(memoryFileStorageCounter.sum())),
+                Utils.bytesToString(memoryFileStorageCounter.sum()),
+                Utils.bytesToString(memoryFileStorageThreshold)),
         reportInterval,
         reportInterval,
         TimeUnit.SECONDS);

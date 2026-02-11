@@ -443,6 +443,10 @@ final private[worker] class StorageManager(conf: CelebornConf, workerSource: Abs
     if (s3HadoopFs == null)
       throw new IllegalStateException("S3 is not configured")
 
+    if (s3MultipartUploadHandlerSharedState != null)
+      return
+
+    // it is not a big deal to create the object twice, no need to handle locking
     val uri = s3HadoopFs.getUri
     val bucketName = uri.getHost
     logInfo(s"Creating S3 client for $uri, bucketName is $bucketName")
@@ -1114,9 +1118,14 @@ final private[worker] class StorageManager(conf: CelebornConf, workerSource: Abs
       fileName: String,
       userIdentifier: UserIdentifier,
       partitionType: PartitionType,
-      partitionSplitEnabled: Boolean): (Flusher, DiskFileInfo, File) = {
+      partitionSplitEnabled: Boolean,
+      overrideStorageType: StorageInfo.Type = null): (Flusher, DiskFileInfo, File) = {
     val suggestedMountPoint = location.getStorageInfo.getMountPoint
-    val storageType = location.getStorageInfo.getType
+
+    val storageType = if (overrideStorageType != null)
+      overrideStorageType
+    else location.getStorageInfo.getType
+
     var retryCount = 0
     var exception: IOException = null
     val shuffleKey = Utils.makeShuffleKey(appId, shuffleId)
