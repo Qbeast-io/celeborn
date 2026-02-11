@@ -204,30 +204,30 @@ public class PartitionLocationSuiteJ {
             bitmap);
 
     String exp1 =
-        "PartitionLocation[\n"
-            + "  id-epoch:0-0\n"
-            + "  host-rpcPort-pushPort-fetchPort-replicatePort:localhost-3-1-2-4\n"
-            + "  mode:PRIMARY\n"
-            + "  peer:(empty)\n"
-            + "  storage hint:StorageInfo{type=MEMORY, mountPoint='', finalResult=false, filePath=null, fileSize=0, chunkOffsets=null}\n"
-            + "  mapIdBitMap:{}]";
+        "PartitionLocation["
+            + "id-epoch:0-0"
+            + ",host-rpcPort-pushPort-fetchPort-replicatePort:localhost-3-1-2-4"
+            + ",mode:PRIMARY"
+            + ",peer:(empty)"
+            + ",storage hint:StorageInfo{type=MEMORY, mountPoint='', finalResult=false, filePath=null, fileSize=0, chunkOffsets=null}"
+            + ",mapIdBitMap:{}]";
     String exp2 =
-        "PartitionLocation[\n"
-            + "  id-epoch:0-0\n"
-            + "  host-rpcPort-pushPort-fetchPort-replicatePort:localhost-3-1-2-4\n"
-            + "  mode:PRIMARY\n"
-            + "  peer:(host-rpcPort-pushPort-fetchPort-replicatePort:localhost-3-1-2-4)\n"
-            + "  storage hint:StorageInfo{type=MEMORY, mountPoint='', finalResult=false, filePath=null, fileSize=0, chunkOffsets=null}\n"
-            + "  mapIdBitMap:{}]";
+        "PartitionLocation["
+            + "id-epoch:0-0"
+            + ",host-rpcPort-pushPort-fetchPort-replicatePort:localhost-3-1-2-4"
+            + ",mode:PRIMARY"
+            + ",peer:(host-rpcPort-pushPort-fetchPort-replicatePort:localhost-3-1-2-4)"
+            + ",storage hint:StorageInfo{type=MEMORY, mountPoint='', finalResult=false, filePath=null, fileSize=0, chunkOffsets=null}"
+            + ",mapIdBitMap:{}]";
     String exp3 =
-        "PartitionLocation[\n"
-            + "  id-epoch:1000-0\n"
-            + "  host-rpcPort-pushPort-fetchPort-replicatePort:localhost-3-1-2-4\n"
-            + "  mode:PRIMARY\n"
-            + "  peer:(host-rpcPort-pushPort-fetchPort-replicatePort:localhost-3-1-2-4)\n"
-            + "  storage hint:StorageInfo{type=MEMORY, mountPoint='/mnt/disk/0', "
-            + "finalResult=false, filePath=null, fileSize=0, chunkOffsets=null}\n"
-            + "  mapIdBitMap:{1,2,3}]";
+        "PartitionLocation["
+            + "id-epoch:1000-0"
+            + ",host-rpcPort-pushPort-fetchPort-replicatePort:localhost-3-1-2-4"
+            + ",mode:PRIMARY"
+            + ",peer:(host-rpcPort-pushPort-fetchPort-replicatePort:localhost-3-1-2-4)"
+            + ",storage hint:StorageInfo{type=MEMORY, mountPoint='/mnt/disk/0'"
+            + ", finalResult=false, filePath=null, fileSize=0, chunkOffsets=null}"
+            + ",mapIdBitMap:{1,2,3}]";
     assertEquals(exp1, location1.toString());
     assertEquals(exp2, location2.toString());
     assertEquals(exp3, location3.toString());

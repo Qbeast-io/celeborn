@@ -19,12 +19,15 @@ package org.apache.celeborn.service.deploy.worker.storage
 
 import java.util.concurrent.atomic.AtomicInteger
 
+import org.apache.commons.io.IOUtils
+
 import org.apache.celeborn.common.CelebornConf
 import org.apache.celeborn.common.exception.CelebornIOException
 import org.apache.celeborn.common.internal.Logging
 import org.apache.celeborn.common.meta.{DiskFileInfo, FileInfo}
 import org.apache.celeborn.common.metrics.source.AbstractSource
 import org.apache.celeborn.common.protocol.{PartitionType, StorageInfo}
+import org.apache.celeborn.common.util.Utils
 import org.apache.celeborn.service.deploy.worker.memory.MemoryManager
 
 class StoragePolicy(conf: CelebornConf, storageManager: StorageManager, source: AbstractSource)
@@ -33,6 +36,9 @@ class StoragePolicy(conf: CelebornConf, storageManager: StorageManager, source: 
   private val evictFileOrder: Option[Map[String, List[String]]] =
     conf.workerStoragePolicyEvictFilePolicy
 
+  logInfo(s"createFileOder is $createFileOrder")
+  logInfo(s"evictFileOrder is $evictFileOrder")
+
   def getEvictedFileWriter(
       celebornFile: TierWriterBase,
       partitionDataWriterContext: PartitionDataWriterContext,
@@ -40,6 +46,8 @@ class StoragePolicy(conf: CelebornConf, storageManager: StorageManager, source: 
       notifier: FlushNotifier): TierWriterBase = {
     evictFileOrder.foreach { order =>
       val orderList = order.get(celebornFile.storageType.name())
+      logInfo(
+        s"getEvictedFileWriter order is $orderList for ${celebornFile.storageType} - $celebornFile")
       if (orderList != null) {
         return createFileWriter(
           partitionDataWriterContext,
@@ -49,7 +57,7 @@ class StoragePolicy(conf: CelebornConf, storageManager: StorageManager, source: 
           true)
       }
     }
-    logError(s"Create evict file failed for ${partitionDataWriterContext.getPartitionLocation}")
+    logError(s"Create evict file failed for ${partitionDataWriterContext.getPartitionLocation} - no policy for ${celebornFile.storageType.name()}")
     null
   }
 
@@ -94,11 +102,12 @@ class StoragePolicy(conf: CelebornConf, storageManager: StorageManager, source: 
     }
 
     def tryCreateFileByType(storageInfoType: StorageInfo.Type): TierWriterBase = {
+      val overrideType = if (evict) storageInfoType else location.getStorageInfo.getType
       try {
         storageInfoType match {
           case StorageInfo.Type.MEMORY =>
             if (location.getStorageInfo.memoryAvailable() && MemoryManager.instance().memoryFileStorageAvailable()) {
-              logDebug(s"Create memory file for ${partitionDataWriterContext.getShuffleKey} ${partitionDataWriterContext.getPartitionLocation.getFileName}")
+              logInfo(s"Create memory file for ${partitionDataWriterContext.getShuffleKey} ${partitionDataWriterContext.getPartitionLocation.getFileName}")
               val memoryFileInfo = storageManager.createMemoryFileInfo(
                 partitionDataWriterContext.getAppId,
                 partitionDataWriterContext.getShuffleId,
@@ -118,11 +127,14 @@ class StoragePolicy(conf: CelebornConf, storageManager: StorageManager, source: 
                 partitionDataWriterContext,
                 storageManager)
             } else {
+              logInfo(
+                s"Not creating ${storageInfoType} file from ${location.getStorageInfo.getType}")
               null
             }
           case StorageInfo.Type.HDD | StorageInfo.Type.SSD | StorageInfo.Type.HDFS | StorageInfo.Type.OSS | StorageInfo.Type.S3 =>
             if (storageManager.localOrDfsStorageAvailable) {
-              logDebug(s"create non-memory file for ${partitionDataWriterContext.getShuffleKey} ${partitionDataWriterContext.getPartitionLocation.getFileName}")
+              logInfo(
+                s"create non-memory file type $storageInfoType (evict=$evict, override=$overrideType) for ${partitionDataWriterContext.getShuffleKey} ${partitionDataWriterContext.getPartitionLocation.getFileName}")
               val (flusher, diskFileInfo, workingDir) = storageManager.createDiskFile(
                 location,
                 partitionDataWriterContext.getAppId,
@@ -130,7 +142,9 @@ class StoragePolicy(conf: CelebornConf, storageManager: StorageManager, source: 
                 location.getFileName,
                 partitionDataWriterContext.getUserIdentifier,
                 partitionDataWriterContext.getPartitionType,
-                partitionDataWriterContext.isPartitionSplitEnabled)
+                partitionDataWriterContext.isPartitionSplitEnabled,
+                overrideType
+              ) // this is different from location type, in case of eviction
               partitionDataWriterContext.setWorkingDir(workingDir)
               val metaHandler = getPartitionMetaHandler(diskFileInfo)
               if (flusher.isInstanceOf[LocalFlusher]
@@ -193,19 +207,24 @@ class StoragePolicy(conf: CelebornConf, storageManager: StorageManager, source: 
       }
 
     val maxSize = order.get.length
-    for (i <- tryCreateFileTypeIndex until maxSize) {
+    val firstIndex = tryCreateFileTypeIndex
+    logInfo(s"creating file for $location orders ${order.get} firstIndex $firstIndex")
+    for (i <- firstIndex until maxSize) {
       val storageStr = order.get(i)
       val storageInfoType = StorageInfo.fromStrToType(storageStr)
+      logInfo(s"try create file $storageInfoType for $location")
       val file = tryCreateFileByType(storageInfoType)
       if (file != null) {
+        logInfo(s"CREATE file $storageInfoType for $location -> $file")
         return file
       }
+
     }
 
     logError(
-      s"Could not create file for storage type ${location.getStorageInfo.getType}")
+      s"Could not create file for storage type ${location.getStorageInfo.getType}, tried ${order.get} firstIndex $firstIndex")
 
     throw new CelebornIOException(
-      s"Create file failed for context ${partitionDataWriterContext.toString}")
+      s"Create file failed for context ${partitionDataWriterContext.toString}, tried ${order.get} firstIndex $firstIndex")
   }
 }
